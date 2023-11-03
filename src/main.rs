@@ -121,7 +121,7 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 			Ok(s) => println!("{s}\n"),
 			_ => println!("UTF-8 ERROR\n"),
 		}
-		send_response(stream, &new_response(400).as_str());
+		send_response_simple(stream, 400);
 		return true;
 	}
 
@@ -134,7 +134,7 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 			b'.' => {
 				if last_byte_was_dot {
 					println!("2\n");
-					send_response(stream, new_response(400).as_str());
+					send_response_simple(stream, 400);
 					return true;
 				}
 				last_byte_was_dot = true;
@@ -153,7 +153,7 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 	let partial_path = &read_buffer[START_OF_PATH..end_of_path];
 	let partial_path = std::str::from_utf8(partial_path);
 	if partial_path.is_err()	{
-		send_response(stream, new_response(400).as_str());
+		send_response_simple(stream, 400);
 		return true;
 	}
 
@@ -170,35 +170,36 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 		Some(os_str) => {
 			match os_str.to_str() {
 				Some("html") => "text/html",
-				Some("css") => "text/css",
-				Some("js") => "application/javascript",
-				Some("svg") => "image/svg+xml",
+				Some("css")  => "text/css",
+				Some("js")   => "application/javascript",
+				Some("svg")  => "image/svg+xml",
+				Some("ttf")  => "font/ttf",
 				_ => "",
 			}
 		},
 		_ => "",
 	};
 	if content_type.len() == 0 {
-		send_response(stream, new_response(404).as_str());
+		send_response_simple(stream, 404);
 		return true;
 	}
 
 	// Read file content or send error response
-	let content_result = std::fs::read_to_string(&path);
+	let content_result = std::fs::read(&path);
 	if content_result.is_err() {
-		send_response(stream, new_response(404).as_str());
+		send_response_simple(stream, 404);
 		return true;
 	}
 	let content = content_result.unwrap();
 
 	// Finally send the file content
-	send_response(stream, new_response_content(&content_type, &content).as_str());
+	send_response_content(stream, content_type, &content);
 	return true;
 }
 
 
-// Make a new simple response string without any content
-fn new_response(code: u16) -> String
+// Send a new simple response without any content
+fn send_response_simple(stream: &mut TcpStream, code: u16)
 {
 	let response_status_text: &str = match code {
 		400 => "Bad Request",
@@ -206,29 +207,32 @@ fn new_response(code: u16) -> String
 		_ => "",
 	};
 
-	return format!("HTTP/1.1 {code} {response_status_text}\r\n\r\n");
+	let response = format!(
+		"HTTP/1.1 {code} {response_status_text}\r\n\
+		Content-Length: 0\r\n\
+		\r\n");
+
+	if stream.write_all(response.as_bytes()).is_ok() {
+		let _ = stream.flush();
+	}
 }
 
 
-// Make a new response string with the given content
-fn new_response_content(content_type: &str, content: &str) -> String
+// Send a new response with the given content
+fn send_response_content(stream: &mut TcpStream, content_type: &str, content: &[u8])
 {
 	let content_length = content.len();
 
-	return format!(
+	let status_and_headers = format!(
 		"HTTP/1.1 200 OK\r\n\
 		Content-Length: {content_length}\r\n\
 		Content-Type: {content_type}\r\n\
-		\r\n\
-		{content}"
+		\r\n"
 	);
-}
 
-
-// Send a reponse string to the TCP stream
-fn send_response(stream: &mut TcpStream, response: &str)
-{
-	if stream.write_all(response.as_bytes()).is_ok() {
-		let _ = stream.flush();
+	if stream.write_all(status_and_headers.as_bytes()).is_ok() {
+		if stream.write_all(content).is_ok() {
+			let _ = stream.flush();
+		}
 	}
 }

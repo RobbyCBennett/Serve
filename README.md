@@ -5,4 +5,5 @@
 Customize the following in the file `main.rs`
 * Port: 8080
 * Preferred public directory: "public" otherwise "."
+* Content types
 * More if you want to change it
