@@ -1,6 +1,6 @@
 # serve
 
-`serve` is a simple single-threaded HTTP file server. It takes no arguments for ease of use after installation. It's a simple tool for local web development. It's useful when you want to send requests to other servers.
+`serve` is a simple single-threaded HTTP file server. It takes no arguments, which makes it easy to use after installation. It's a simple tool for local web development. It's useful when you want to send requests to other servers.
 
 Customize the following in the file `main.rs`
 * Port: 8080
