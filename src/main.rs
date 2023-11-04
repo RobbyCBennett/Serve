@@ -117,10 +117,6 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 
 	// See a GET request or send error response
 	if !read_buffer.starts_with(b"GET /") {
-		match std::str::from_utf8(read_buffer) {
-			Ok(s) => println!("{s}\n"),
-			_ => println!("UTF-8 ERROR\n"),
-		}
 		send_response_simple(stream, 400);
 		return true;
 	}
@@ -133,7 +129,6 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 		match read_buffer[i] {
 			b'.' => {
 				if last_byte_was_dot {
-					println!("2\n");
 					send_response_simple(stream, 400);
 					return true;
 				}
