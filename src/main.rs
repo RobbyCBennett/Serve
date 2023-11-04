@@ -161,12 +161,13 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 	let partial_path = partial_path.unwrap();
 	let mut path = String::from(public_dir);
 	path.push_str(partial_path);
-	if path.ends_with("/") {
-		path.push_str("index.html");
+	let mut path = Path::new(&path).to_path_buf();
+	if path.is_dir() {
+		path = path.join("index.html");
 	}
 
 	// Get content type or send error response
-	let content_type = match Path::new(&path).extension() {
+	let content_type = match path.extension() {
 		Some(os_str) => {
 			match os_str.to_str() {
 				Some("html") => "text/html",
