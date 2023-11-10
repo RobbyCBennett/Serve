@@ -165,11 +165,11 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 	let content_type = match path.extension() {
 		Some(os_str) => {
 			match os_str.to_str() {
-				Some("html") => "text/html",
-				Some("css")  => "text/css",
-				Some("js")   => "application/javascript",
-				Some("svg")  => "image/svg+xml",
-				Some("ttf")  => "font/ttf",
+				Some("html")  => "text/html",
+				Some("css")   => "text/css",
+				Some("js")    => "application/javascript",
+				Some("svg")   => "image/svg+xml",
+				Some("woff2") => "font/woff2",
 				_ => "",
 			}
 		},
