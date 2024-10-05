@@ -9,4 +9,4 @@ lto = true
 codegen-units = 1
 
 [dependencies]
-libc = "0.2"
+libc = "0.2.159"
