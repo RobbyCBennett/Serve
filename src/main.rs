@@ -5,26 +5,28 @@ use std::net::TcpStream;
 use std::path::Path;
 
 
+enum StatusCode
+{
+	BadRequest = 400,
+	NotFound   = 404,
+}
+
+
 const HOSTNAME: &str = "localhost";
 const PORT: u16 = 8080;
 
 const PREFERRED_PUBLIC_DIR: &str = "public";
 
-const MAX_CONNECTIONS: usize = 16;
-const READ_BUFFER_SIZE: usize = 256;
-
-
-static mut RUNNING: bool = true;
+const READ_BUFFER_SIZE: usize = 4096;
 
 
 fn main() -> std::io::Result<()>
 {
 	// Handle the interrupt signal
-	unsafe { libc::signal(libc::SIGINT, handle_signal as libc::sighandler_t); }
+	unsafe { libc::signal(libc::SIGINT, handle_interrupt as libc::sighandler_t); }
 
-	// Create a non-blocking TCP listener or stop
+	// Create a TCP listener or crash
 	let listener = TcpListener::bind(format!("{HOSTNAME}:{PORT}"))?;
-	listener.set_nonblocking(true)?;
 
 	// Use "public" if it exists, otherwise "."
 	let public_dir = if Path::new(PREFERRED_PUBLIC_DIR).is_dir() {
@@ -37,75 +39,54 @@ fn main() -> std::io::Result<()>
 	println!("http://{HOSTNAME}:{PORT}");
 	println!("Serving files: {public_dir}");
 
-	// Many TCP streams as they arrive, with one read bufffer and trash buffer for them all
-	let mut streams = Vec::<TcpStream>::with_capacity(MAX_CONNECTIONS);
-	let mut read_buffer  = [b'0'; READ_BUFFER_SIZE];
-	let mut trash_buffer = [b'0'; READ_BUFFER_SIZE];
+	// Create a buffer to reuse
+	let mut read_buffer = [0; READ_BUFFER_SIZE];
+	let mut trash_buffer = [0; READ_BUFFER_SIZE];
 
-	// Keep each incoming stream
+	// Handle each stream
 	for stream in listener.incoming() {
-		if unsafe { !RUNNING } {
-			return Ok(());
+		match stream {
+			Ok(stream) => handle_stream(public_dir, &mut read_buffer, &mut trash_buffer, stream),
+			_ => (),
 		}
-
-		// If there's a new stream, enough space, and it can be non-blocking, keep it
-		if streams.len() < MAX_CONNECTIONS {
-			match stream {
-				Ok(stream) => match stream.set_nonblocking(true) {
-					Ok(()) => streams.push(stream),
-					_ => (),
-				}
-				_ => (),
-			}
-		}
-
-		// Read/write each stream, removing the ones that don't exist
-		streams.retain_mut(|stream|
-			read_and_write(public_dir, &mut read_buffer, &mut trash_buffer, stream));
 	}
 
 	return Ok(());
 }
 
 
-// When a specific signal is received, remember to stop running
-extern "C" fn handle_signal(_signal: libc::c_int)
+// When the interrupt signal is received, exit immediately
+extern "C" fn handle_interrupt(_signal: libc::c_int)
 {
-	unsafe { RUNNING = false; }
+	std::process::exit(0);
 }
 
 
-// Handle each stream by trying to read a request and write a response, returning whether the stream exists
-fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [u8], stream: &mut TcpStream) -> bool
+// Try to read a request and write a response
+fn handle_stream(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [u8], mut stream: TcpStream)
 {
-	// Read the first part of the request or stop
+	let stream = &mut stream;
+
+	// Read the important part of the request into the read buffer
 	match stream.read(read_buffer) {
-		Err(_) => return true,
-		Ok(0) => return false,
-		_ => (),
+		// Read the remainder into the trash buffer
+		Ok(READ_BUFFER_SIZE) => loop {
+			match stream.read(trash_buffer) {
+				Ok(READ_BUFFER_SIZE) => continue,
+				Ok(_) => break,
+				Err(_) => return,
+			}
+		},
+		Ok(_) => (),
+		Err(_) => return,
 	}
 
-	// Read the rest of the request into the trash buffer
-	loop {
-		if unsafe { !RUNNING } {
-			return false;
-		}
-
-		// Read
-		match stream.read(trash_buffer) {
-			Ok(0) => return false,
-			Ok(_) => (),
-			Err(_) => break,
-		}
-	}
-
-	// See a GET request or send error response
+	// See a GET request or send an error response
 	if !read_buffer.starts_with(b"GET /") {
-		send_response_simple(stream, 400);
-		return true;
+		return send_response_simple(stream, StatusCode::BadRequest);
 	}
 
-	// Parse a path without .. or send error response
+	// Parse a path without .. or send an error response
 	const START_OF_PATH: usize = 4;
 	let mut end_of_path = READ_BUFFER_SIZE - 1;
 	let mut last_byte_was_dot = false;
@@ -113,8 +94,7 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 		match read_buffer[i] {
 			b'.' => {
 				if last_byte_was_dot {
-					send_response_simple(stream, 400);
-					return true;
+					return send_response_simple(stream, StatusCode::BadRequest);
 				}
 				last_byte_was_dot = true;
 			},
@@ -128,14 +108,11 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 		}
 	}
 
-	// Parse the path as UTF-8 or send error response
+	// Parse the path as UTF-8 or send an error response
 	let partial_path = &read_buffer[START_OF_PATH..end_of_path];
 	let partial_path = match std::str::from_utf8(partial_path) {
 		Ok(partial_path) => partial_path,
-		Err(_) => {
-			send_response_simple(stream, 400);
-			return true;
-		},
+		Err(_) => return send_response_simple(stream, StatusCode::BadRequest),
 	};
 
 	// Concatenate the public directory, the path, and possibly index.html
@@ -145,60 +122,44 @@ fn read_and_write(public_dir: &str, read_buffer: &mut [u8], trash_buffer: &mut [
 	if path.is_dir() {
 		// To fix relative paths, redirect by adding a trailing slash
 		if !partial_path.ends_with("/") {
-			send_response_redirect(stream, &format!("{partial_path}/"));
-			return true;
+			return send_response_redirect(stream, &format!("{partial_path}/"));
 		}
 		path = path.join("index.html");
 	}
 
-	// Get content type or send error response
+	// Get the content type or send an error response
 	let content_type = match path.extension() {
-		Some(os_str) => {
-			match os_str.to_str() {
-				Some("html")  => "text/html",
-				Some("css")   => "text/css",
-				Some("js")    => "application/javascript",
-				Some("svg")   => "image/svg+xml",
-				Some("woff2") => "font/woff2",
-				_ => "",
-			}
+		Some(os_str) => match os_str.to_str() {
+			Some("html")  => "text/html",
+			Some("css")   => "text/css",
+			Some("js")    => "application/javascript",
+			Some("svg")   => "image/svg+xml",
+			Some("woff2") => "font/woff2",
+			_ => return send_response_simple(stream, StatusCode::NotFound),
 		},
-		_ => "",
+		_ => return send_response_simple(stream, StatusCode::NotFound),
 	};
-	if content_type.len() == 0 {
-		send_response_simple(stream, 404);
-		return true;
-	}
 
-	// Read file content or send error response
+	// Read file content or send an error response
 	let content = match std::fs::read(&path) {
 		Ok(content) => content,
-		Err(_) => {
-			send_response_simple(stream, 404);
-			return true;
-		},
+		Err(_) => return send_response_simple(stream, StatusCode::NotFound),
 	};
 
 	// Finally send the file content
 	send_response_content(stream, content_type, &content);
-	return true;
 }
 
 
 // Send a new simple response without any content
-fn send_response_simple(stream: &mut TcpStream, code: u16)
+fn send_response_simple(stream: &mut TcpStream, status_code: StatusCode)
 {
-	let response_status_text: &str = match code {
-		400 => "Bad Request",
-		404 => "Not Found",
-		_ => "",
+	let response: &str = match status_code {
+		StatusCode::BadRequest => "HTTP/1.1 400 Bad Request\r\n\r\n",
+		StatusCode::NotFound => "HTTP/1.1 404 Not Found\r\n\r\n",
 	};
 
-	let response = format!("HTTP/1.1 {code} {response_status_text}\r\n\r\n");
-
-	if stream.write_all(response.as_bytes()).is_ok() {
-		let _ = stream.flush();
-	}
+	let _ = stream.write_all(response.as_bytes());
 }
 
 
@@ -207,9 +168,7 @@ fn send_response_redirect(stream: &mut TcpStream, location: &str)
 {
 	let response = format!("HTTP/1.1 308 Permanent Redirect\r\nLocation: {location}\r\n\r\n");
 
-	if stream.write_all(response.as_bytes()).is_ok() {
-		let _ = stream.flush();
-	}
+	let _ = stream.write_all(response.as_bytes());
 }
 
 
@@ -219,15 +178,11 @@ fn send_response_content(stream: &mut TcpStream, content_type: &str, content: &[
 	let content_length = content.len();
 
 	let status_and_headers = format!(
-		"HTTP/1.1 200 OK\r\n\
-		Content-Length: {content_length}\r\n\
-		Content-Type: {content_type}\r\n\
-		\r\n"
-	);
+		"HTTP/1.1 200 OK\r\nContent-Length: {content_length}\r\nContent-Type: {content_type}\r\n\r\n");
 
-	if stream.write_all(status_and_headers.as_bytes()).is_ok() {
-		if stream.write_all(content).is_ok() {
-			let _ = stream.flush();
-		}
+	if stream.write_all(status_and_headers.as_bytes()).is_err() {
+		return;
 	}
+
+	let _ = stream.write_all(content);
 }
