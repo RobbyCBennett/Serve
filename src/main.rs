@@ -19,11 +19,19 @@ const PREFERRED_PUBLIC_DIR: &str = "public";
 
 const READ_BUFFER_SIZE: usize = 4096;
 
+const SIGINT: core::ffi::c_int = 2;
+
+
+unsafe extern "C"
+{
+	fn signal(signum: core::ffi::c_int, handler: usize) -> usize;
+}
+
 
 fn main() -> std::io::Result<()>
 {
 	// Handle the interrupt signal
-	unsafe { libc::signal(libc::SIGINT, handle_interrupt as libc::sighandler_t); }
+	unsafe { signal(SIGINT, handle_interrupt as usize); }
 
 	// Create a TCP listener or crash
 	let listener = TcpListener::bind(format!("{HOSTNAME}:{PORT}"))?;
@@ -56,7 +64,7 @@ fn main() -> std::io::Result<()>
 
 
 // When the interrupt signal is received, exit immediately
-extern "C" fn handle_interrupt(_signal: libc::c_int)
+extern "C" fn handle_interrupt(_signal: core::ffi::c_int)
 {
 	std::process::exit(0);
 }
